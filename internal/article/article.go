@@ -1,8 +1,8 @@
 package article
 
 import (
-	"time" // Required for timestamps in events
 	"errors" // Required for error handling
+	"time"   // Required for timestamps in events
 
 	"article-manager/internal/events" // Adjusted import path
 )
@@ -13,6 +13,7 @@ type ArticleAggregate struct {
 	ID      string
 	Title   string
 	Content string
+	Price   float64
 	Version int
 	// ungespeicherte Änderungen/Events
 	changes []interface{}
@@ -51,11 +52,15 @@ func (a *ArticleAggregate) ApplyEvent(event interface{}) error {
 		a.ID = e.ID
 		a.Title = e.Title
 		a.Content = e.Content
+		a.Price = e.Price
 		// Die Version wird nicht mehr in ApplyEvent für ArticleCreatedEvent gesetzt.
 		// Der Aufrufer (HandleCreateArticleCommand oder loadAggregate) ist dafür verantwortlich.
-	case *events.ArticleUpdatedEvent:
+	case *events.ArticleTitleUpdatedEvent:
 		a.Title = e.Title
+	case *events.ArticleContentUpdatedEvent:
 		a.Content = e.Content
+	case *events.ArticlePriceUpdatedEvent:
+		a.Price = e.Price
 	case *events.ArticleDeletedEvent:
 		// Hier könnte man einen "gelöscht" Status setzen, falls Soft-Delete gewünscht ist.
 		// Für Hard-Delete ist hier eventuell keine Zustandsänderung nötig,
@@ -75,33 +80,24 @@ func (a *ArticleAggregate) recordChange(event interface{}) {
 
 // HandleCreateArticleCommand verarbeitet das CreateArticleCommand.
 // Es validiert das Command und erzeugt ein ArticleCreatedEvent.
-func (a *ArticleAggregate) HandleCreateArticleCommand(id string, title string, content string) error {
+func (a *ArticleAggregate) HandleCreateArticleCommand(id string, title string, content string, price float64) error {
 	if title == "" {
 		return errors.New("Titel darf nicht leer sein")
 	}
 	if content == "" {
 		return errors.New("Inhalt darf nicht leer sein")
 	}
-
-	// a.Version ist hier -1. Nach ApplyEvent und dem Setzen wird es 0 sein.
-	// Das Event sollte die Version widerspiegeln, die das Aggregat *nach* diesem Event haben wird.
-	event := &events.ArticleCreatedEvent{
-		ID:        id,
-		Title:     title,
-		Content:   content,
-		Timestamp: time.Now(),
-		// Version wird gesetzt, nachdem a.Version aktualisiert wurde, aber bevor das Event aufgezeichnet wird.
+	if price < 0.0 {
+		return errors.New("Preis darf nicht negativ sein")
 	}
-	// Erst ApplyEvent und Version setzen, dann die Version im Event festhalten.
-	// Die Logik unten setzt a.Version auf 0 NACH ApplyEvent.
-	// Das Event sollte die Version 0 tragen.
-	a.recordChange(event) // Event wird hier mit der initialen Version des Aggregats (-1) aufgezeichnet
+
 	// Korrektur: Event muss nach der Versionsaktualisierung des Aggregats erstellt oder aktualisiert werden.
 	// Temporäre Variable für das Event, um die Version später zu setzen.
 	createdEvent := &events.ArticleCreatedEvent{
 		ID:        id,
 		Title:     title,
 		Content:   content,
+		Price:     price,
 		Timestamp: time.Now(),
 		// Version wird nach der Aktualisierung von a.Version gesetzt
 	}
@@ -109,30 +105,54 @@ func (a *ArticleAggregate) HandleCreateArticleCommand(id string, title string, c
 	if err := a.ApplyEvent(createdEvent); err != nil { // Zustand direkt anwenden und Fehler prüfen
 		return err
 	}
-	a.Version = 0 // Nach dem Erstellen ist die Version des Aggregats 0
+	a.Version = 0                    // Nach dem Erstellen ist die Version des Aggregats 0
 	createdEvent.Version = a.Version // Setze die korrekte Version im Event
-	a.recordChange(createdEvent) // Zeichne das Event mit der korrekten Version auf
+	a.recordChange(createdEvent)     // Zeichne das Event mit der korrekten Version auf
 	return nil
 }
 
-// HandleUpdateArticleCommand verarbeitet das UpdateArticleCommand.
-// Es validiert das Command und erzeugt ein ArticleUpdatedEvent.
-func (a *ArticleAggregate) HandleUpdateArticleCommand(title string, content string) error {
+// HandleUpdateArticleTitleCommand verarbeitet das UpdateArticleTitleCommand.
+// Es validiert das Command und erzeugt ein ArticleTitleUpdatedEvent.
+func (a *ArticleAggregate) HandleUpdateArticleTitleCommand(title string) error {
 	if title == "" {
 		return errors.New("Titel darf nicht leer sein")
 	}
+	// Prüfen, ob sich tatsächlich etwas geändert hat (optional, aber gut für die Performance)
+	if title == a.Title {
+		return nil
+	}
+
+	// Temporäre Variable für das Event, um die Version später zu setzen.
+	updatedEvent := &events.ArticleTitleUpdatedEvent{
+		ID:        a.ID,
+		Title:     title,
+		Timestamp: time.Now(),
+		// Version wird nach der Aktualisierung von a.Version gesetzt
+	}
+
+	if err := a.ApplyEvent(updatedEvent); err != nil { // Zustand direkt anwenden und Fehler prüfen
+		return err
+	}
+	a.IncrementVersion()             // Version erhöhen, nachdem das Event erfolgreich angewendet wurde
+	updatedEvent.Version = a.Version // Setze die korrekte Version im Event
+	a.recordChange(updatedEvent)     // Zeichne das Event mit der korrekten Version auf
+	return nil
+}
+
+// HandleUpdateArticleContentCommand verarbeitet das UpdateArticleContentCommand.
+// Es validiert das Command und erzeugt ein ArticleContentUpdatedEvent.
+func (a *ArticleAggregate) HandleUpdateArticleContentCommand(content string) error {
 	if content == "" {
 		return errors.New("Inhalt darf nicht leer sein")
 	}
 	// Prüfen, ob sich tatsächlich etwas geändert hat (optional, aber gut für die Performance)
-	if title == a.Title && content == a.Content {
-		return errors.New("keine Änderungen festgestellt")
+	if content == a.Content {
+		return nil
 	}
 
 	// Temporäre Variable für das Event, um die Version später zu setzen.
-	updatedEvent := &events.ArticleUpdatedEvent{
+	updatedEvent := &events.ArticleContentUpdatedEvent{
 		ID:        a.ID,
-		Title:     title,
 		Content:   content,
 		Timestamp: time.Now(),
 		// Version wird nach der Aktualisierung von a.Version gesetzt
@@ -141,9 +161,36 @@ func (a *ArticleAggregate) HandleUpdateArticleCommand(title string, content stri
 	if err := a.ApplyEvent(updatedEvent); err != nil { // Zustand direkt anwenden und Fehler prüfen
 		return err
 	}
-	a.IncrementVersion() // Version erhöhen, nachdem das Event erfolgreich angewendet wurde
+	a.IncrementVersion()             // Version erhöhen, nachdem das Event erfolgreich angewendet wurde
 	updatedEvent.Version = a.Version // Setze die korrekte Version im Event
-	a.recordChange(updatedEvent) // Zeichne das Event mit der korrekten Version auf
+	a.recordChange(updatedEvent)     // Zeichne das Event mit der korrekten Version auf
+	return nil
+}
+
+// HandleUpdateArticlePriceCommand verarbeitet das UpdateArticlePriceCommand.
+// Es validiert das Command und erzeugt ein ArticlePriceUpdatedEvent.
+func (a *ArticleAggregate) HandleUpdateArticlePriceCommand(price float64) error {
+	if price < 0.0 {
+		return errors.New("Preis darf nicht negativ sein")
+	}
+	if price == a.Price {
+		return nil
+	}
+
+	// Temporäre Variable für das Event, um die Version später zu setzen.
+	updatedEvent := &events.ArticlePriceUpdatedEvent{
+		ID:        a.ID,
+		Price:     price,
+		Timestamp: time.Now(),
+		// Version wird nach der Aktualisierung von a.Version gesetzt
+	}
+
+	if err := a.ApplyEvent(updatedEvent); err != nil { // Zustand direkt anwenden und Fehler prüfen
+		return err
+	}
+	a.IncrementVersion()             // Version erhöhen, nachdem das Event erfolgreich angewendet wurde
+	updatedEvent.Version = a.Version // Setze die korrekte Version im Event
+	a.recordChange(updatedEvent)     // Zeichne das Event mit der korrekten Version auf
 	return nil
 }
 
@@ -163,8 +210,8 @@ func (a *ArticleAggregate) HandleDeleteArticleCommand() error {
 	if err := a.ApplyEvent(deletedEvent); err != nil { // Zustand direkt anwenden und Fehler prüfen
 		return err
 	}
-	a.IncrementVersion() // Version erhöhen, nachdem das Event erfolgreich angewendet wurde
+	a.IncrementVersion()             // Version erhöhen, nachdem das Event erfolgreich angewendet wurde
 	deletedEvent.Version = a.Version // Setze die korrekte Version im Event
-	a.recordChange(deletedEvent) // Zeichne das Event mit der korrekten Version auf
+	a.recordChange(deletedEvent)     // Zeichne das Event mit der korrekten Version auf
 	return nil
 }

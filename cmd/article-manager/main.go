@@ -5,12 +5,12 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time" // Für eventuelle Timeouts oder Logging
+	//"time" // Für eventuelle Timeouts oder Logging
 
 	"article-manager/internal/commands"
 	"article-manager/internal/eventstore"
 	"article-manager/internal/handlers"
-	"article-manager/internal/readmodels" // Wird für Antworttypen benötigt
+	//"article-manager/internal/readmodels" // Wird für Antworttypen benötigt
 
 	"github.com/google/uuid"
 )
@@ -37,8 +37,9 @@ func (a *App) handleCreateArticle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
+		Title   string  `json:"title"`
+		Content string  `json:"content"`
+		Price   float64 `json:"price"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -51,11 +52,17 @@ func (a *App) handleCreateArticle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Price < 0.0 {
+		http.Error(w, "Preis darf nicht negativ sein", http.StatusBadRequest)
+		return
+	}
+
 	articleID := uuid.New().String()
 	cmd := commands.CreateArticleCommand{
 		ID:      articleID,
 		Title:   req.Title,
 		Content: req.Content,
+		Price:   req.Price,
 	}
 
 	if err := a.commandHandler.HandleCreateArticle(cmd); err != nil {
@@ -73,7 +80,7 @@ func (a *App) handleCreateArticle(w http.ResponseWriter, r *http.Request) {
 		// Dies ist ein Zustand, der in einem verteilten System auftreten könnte.
 		// Hier senden wir eine generische Erfolgsmeldung oder die ID.
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"id": articleID, "status": "Artikel erstellt, ReadModel wird aktualisiert"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": articleID, "status": "Artikel erstellt, ReadModel wird aktualisiert"})
 		return
 	}
 
@@ -102,8 +109,9 @@ func (a *App) handleUpdateArticle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
+		Title   string  `json:"title"`
+		Content string  `json:"content"`
+		Price   float64 `json:"price"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -111,29 +119,41 @@ func (a *App) handleUpdateArticle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Title == "" || req.Content == "" {
-		http.Error(w, "Titel und Inhalt dürfen nicht leer sein", http.StatusBadRequest)
-		return
+	var cmds []interface{}
+
+	if req.Title != "" {
+		cmds = append(cmds, commands.UpdateArticleTitleCommand{
+			ID:    id,
+			Title: req.Title,
+		})
+	}
+	if req.Content != "" {
+		cmds = append(cmds, commands.UpdateArticleContentCommand{
+			ID:      id,
+			Content: req.Content,
+		})
+	}
+	if req.Price > 0.0 {
+		cmds = append(cmds, commands.UpdateArticlePriceCommand{
+			ID:    id,
+			Price: req.Price,
+		})
 	}
 
-	cmd := commands.UpdateArticleCommand{
-		ID:      id,
-		Title:   req.Title,
-		Content: req.Content,
-	}
-
-	if err := a.commandHandler.HandleUpdateArticle(cmd); err != nil {
-		log.Printf("Fehler bei HandleUpdateArticle Command für ID %s: %v", id, err)
-		if strings.Contains(err.Error(), "nicht gefunden") {
-			http.Error(w, "Fehler beim Aktualisieren: Artikel nicht gefunden", http.StatusNotFound)
-		} else if strings.Contains(err.Error(), "optimistic lock error") {
-			http.Error(w, "Fehler beim Aktualisieren: Konflikt (Optimistic Lock)", http.StatusConflict)
-		} else {
-			http.Error(w, "Fehler beim Aktualisieren des Artikels: "+err.Error(), http.StatusInternalServerError)
+	for _, cmd := range cmds {
+		if err := a.commandHandler.HandleUpdateArticle(cmd); err != nil {
+			log.Printf("Fehler bei HandleUpdateArticle Command für ID %s: %v", id, err)
+			if strings.Contains(err.Error(), "nicht gefunden") {
+				http.Error(w, "Fehler beim Aktualisieren: Artikel nicht gefunden", http.StatusNotFound)
+			} else if strings.Contains(err.Error(), "optimistic lock error") {
+				http.Error(w, "Fehler beim Aktualisieren: Konflikt (Optimistic Lock)", http.StatusConflict)
+			} else {
+				http.Error(w, "Fehler beim Aktualisieren des Artikels: "+err.Error(), http.StatusInternalServerError)
+			}
+			return
 		}
-		return
 	}
-	
+
 	articleReadModel, err := a.queryHandler.GetArticleByID(id)
 	if err != nil {
 		log.Printf("Fehler beim Abrufen des ReadModels nach Update für ID %s: %v", id, err)
@@ -252,7 +272,7 @@ func main() {
 		commandHandler: commandHandler,
 		eventHandler:   eventHandler, // Für Vollständigkeit, auch wenn HTTP-Handler es nicht direkt nutzen
 		queryHandler:   queryHandler,
-		eventStore:     eventStore,   // Für Vollständigkeit
+		eventStore:     eventStore, // Für Vollständigkeit
 	}
 
 	// HTTP-Routing
@@ -276,7 +296,7 @@ func main() {
 		// Beispiel: /articles/uuid-string
 		// r.URL.Path wird sein "/articles/uuid-string"
 		// id := strings.TrimPrefix(r.URL.Path, "/articles/")
-		
+
 		// Wir müssen sicherstellen, dass wir nicht "/articles" (ohne Trailing Slash) hier abfangen,
 		// wenn es für GET all oder POST create gedacht war.
 		// Die Registrierung von "/articles" (ohne Slash) und "/articles/" (mit Slash)
@@ -291,7 +311,6 @@ func main() {
 			http.Error(w, "Ungültiger Endpunkt. Meinten Sie /articles oder /articles/{id}?", http.StatusBadRequest)
 			return
 		}
-
 
 		switch r.Method {
 		case http.MethodGet:

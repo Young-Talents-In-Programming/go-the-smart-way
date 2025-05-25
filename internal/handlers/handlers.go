@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"article-manager/internal/events"
+	"article-manager/internal/readmodels"
 	"fmt" // For error wrapping
+	"sync"
 
 	"article-manager/internal/article"
 	"article-manager/internal/commands"
 	"article-manager/internal/eventstore"
 	// "article-manager/internal/events" // Not directly used by command handler, but by aggregate
+	"log"
 )
 
 // ArticleCommandHandler verarbeitet Artikel-bezogene Commands.
@@ -34,7 +38,7 @@ func (h *ArticleCommandHandler) HandleCreateArticle(cmd commands.CreateArticleCo
 	aggregate := article.NewArticleAggregate(cmd.ID)
 
 	// HandleCreateArticleCommand wendet das Event an und setzt die Version des Aggregats auf 0.
-	err := aggregate.HandleCreateArticleCommand(cmd.ID, cmd.Title, cmd.Content)
+	err := aggregate.HandleCreateArticleCommand(cmd.ID, cmd.Title, cmd.Content, cmd.Price)
 	if err != nil {
 		return fmt.Errorf("fehler bei der Ausführung von CreateArticleCommand: %w", err)
 	}
@@ -66,7 +70,20 @@ func (h *ArticleCommandHandler) HandleCreateArticle(cmd commands.CreateArticleCo
 
 // HandleUpdateArticle verarbeitet das UpdateArticleCommand.
 // Es lädt das ArticleAggregate, führt das Command aus und speichert die resultierenden Events.
-func (h *ArticleCommandHandler) HandleUpdateArticle(cmd commands.UpdateArticleCommand) error {
+func (h *ArticleCommandHandler) HandleUpdateArticle(cmd any) error {
+
+	switch cmd.(type) {
+	case commands.UpdateArticleTitleCommand:
+		return h.handleUpdateArticleTitle(cmd.(commands.UpdateArticleTitleCommand))
+	case commands.UpdateArticleContentCommand:
+		return h.handleUpdateArticleContent(cmd.(commands.UpdateArticleContentCommand))
+	case commands.UpdateArticlePriceCommand:
+		return h.handleUpdateArticlePrice(cmd.(commands.UpdateArticlePriceCommand))
+	}
+	return nil
+}
+
+func (h *ArticleCommandHandler) handleUpdateArticleTitle(cmd commands.UpdateArticleTitleCommand) error {
 	aggregate, err := h.loadAggregate(cmd.ID)
 	if err != nil {
 		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticleCommand: %w", cmd.ID, err)
@@ -76,14 +93,86 @@ func (h *ArticleCommandHandler) HandleUpdateArticle(cmd commands.UpdateArticleCo
 	expectedVersion := aggregate.Version
 
 	// HandleUpdateArticleCommand wendet das Event an und inkrementiert die Version des Aggregats.
-	err = aggregate.HandleUpdateArticleCommand(cmd.Title, cmd.Content)
+	err = aggregate.HandleUpdateArticleTitleCommand(cmd.Title)
 	if err != nil {
-		return fmt.Errorf("fehler bei der Ausführung von UpdateArticleCommand für Aggregat %s: %w", cmd.ID, err)
+		return fmt.Errorf("fehler bei der Ausführung von UpdateArticleTitleCommand für Aggregat %s: %w", cmd.ID, err)
 	}
 
 	changes := aggregate.GetChanges()
 	if len(changes) == 0 {
-		// Keine Änderungen (z.B. wenn Titel und Inhalt identisch sind).
+		// Keine Änderungen.
+		return nil
+	}
+
+	err = h.eventStore.SaveEvents(aggregate.ID, changes, expectedVersion)
+	if err != nil {
+		return fmt.Errorf("fehler beim Speichern der Events für Aggregat %s (erwartete Version %d): %w", aggregate.ID, expectedVersion, err)
+	}
+
+	// Direkte Weiterleitung der Events an den EventHandler
+	eventsToDispatch := aggregate.GetChanges()
+	for _, event := range eventsToDispatch {
+		if err := h.eventHandler.HandleEvent(event); err != nil {
+			log.Printf("FEHLER: Read-Model Event-Handler schlug fehl für Event %T Aggregat %s: %v", event, aggregate.ID, err)
+		}
+	}
+	aggregate.ClearChanges() // Änderungen erst nach der Weiterleitung löschen
+	return nil
+}
+func (h *ArticleCommandHandler) handleUpdateArticleContent(cmd commands.UpdateArticleContentCommand) error {
+	aggregate, err := h.loadAggregate(cmd.ID)
+	if err != nil {
+		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticleCommand: %w", cmd.ID, err)
+	}
+
+	// Die Version des geladenen Aggregats ist die erwartete Version für den Optimistic Lock.
+	expectedVersion := aggregate.Version
+
+	// HandleUpdateArticleCommand wendet das Event an und inkrementiert die Version des Aggregats.
+	err = aggregate.HandleUpdateArticleContentCommand(cmd.Content)
+	if err != nil {
+		return fmt.Errorf("fehler bei der Ausführung von UpdateArticleTitleCommand für Aggregat %s: %w", cmd.ID, err)
+	}
+
+	changes := aggregate.GetChanges()
+	if len(changes) == 0 {
+		// Keine Änderungen.
+		return nil
+	}
+
+	err = h.eventStore.SaveEvents(aggregate.ID, changes, expectedVersion)
+	if err != nil {
+		return fmt.Errorf("fehler beim Speichern der Events für Aggregat %s (erwartete Version %d): %w", aggregate.ID, expectedVersion, err)
+	}
+
+	// Direkte Weiterleitung der Events an den EventHandler
+	eventsToDispatch := aggregate.GetChanges()
+	for _, event := range eventsToDispatch {
+		if err := h.eventHandler.HandleEvent(event); err != nil {
+			log.Printf("FEHLER: Read-Model Event-Handler schlug fehl für Event %T Aggregat %s: %v", event, aggregate.ID, err)
+		}
+	}
+	aggregate.ClearChanges() // Änderungen erst nach der Weiterleitung löschen
+	return nil
+}
+func (h *ArticleCommandHandler) handleUpdateArticlePrice(cmd commands.UpdateArticlePriceCommand) error {
+	aggregate, err := h.loadAggregate(cmd.ID)
+	if err != nil {
+		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticleCommand: %w", cmd.ID, err)
+	}
+
+	// Die Version des geladenen Aggregats ist die erwartete Version für den Optimistic Lock.
+	expectedVersion := aggregate.Version
+
+	// HandleUpdateArticleCommand wendet das Event an und inkrementiert die Version des Aggregats.
+	err = aggregate.HandleUpdateArticlePriceCommand(cmd.Price)
+	if err != nil {
+		return fmt.Errorf("fehler bei der Ausführung von UpdateArticleTitleCommand für Aggregat %s: %w", cmd.ID, err)
+	}
+
+	changes := aggregate.GetChanges()
+	if len(changes) == 0 {
+		// Keine Änderungen.
 		return nil
 	}
 
@@ -174,7 +263,6 @@ func (h *ArticleCommandHandler) loadAggregate(aggregateID string) (*article.Arti
 // Die Methode saveAggregateEvents wird nicht mehr benötigt, da ihre Logik
 // direkt in die Command Handler Methoden integriert wurde.
 
-
 // -- Event Handler für Read Models --
 
 // Die Imports "log", "article-manager/internal/events", "article-manager/internal/readmodels", "sync"
@@ -211,12 +299,13 @@ func (h *ArticleEventHandler) HandleEvent(event interface{}) error {
 			ID:      e.ID,
 			Title:   e.Title,
 			Content: e.Content,
+			Price:   e.Price,
 			Version: e.Version, // Setze die Version des ReadModels auf die Version des Events
 		}
 		h.articles[e.ID] = newArticle
 		log.Printf("ReadModel für Artikel %s erstellt (Version %d): %+v", e.ID, e.Version, newArticle)
 
-	case *events.ArticleUpdatedEvent:
+	case *events.ArticleTitleUpdatedEvent:
 		// Aktualisiere das bestehende ReadModel.
 		currentArticle, ok := h.articles[e.ID]
 		if !ok {
@@ -227,18 +316,63 @@ func (h *ArticleEventHandler) HandleEvent(event interface{}) error {
 			log.Printf("WARNUNG: ArticleUpdatedEvent für nicht existierendes ReadModel ID %s empfangen. ReadModel wird neu erstellt.", e.ID)
 			currentArticle = readmodels.ArticleReadModel{ID: e.ID, Version: -1} // Angenommene Version vor dem ersten Update
 		}
-		
+
 		// Stelle sicher, dass das Update-Event neuer ist als der aktuelle Stand des Readmodels.
 		// e.Version ist die Version des Aggregats NACH diesem Update-Event.
 		if e.Version > currentArticle.Version {
 			currentArticle.Title = e.Title
+			currentArticle.Version = e.Version // Aktualisiere die Version des ReadModels auf die Version des Events
+			h.articles[e.ID] = currentArticle
+			log.Printf("ReadModel für Artikel %s aktualisiert (Version %d): %+v", e.ID, e.Version, currentArticle)
+		} else {
+			log.Printf("INFO: Veraltetes oder gleichwertiges ArticleUpdatedEvent für ReadModel ID %s empfangen (EventVersion: %d, ReadModelVersion: %d). Ignoriert.", e.ID, e.Version, currentArticle.Version)
+		}
+
+	case *events.ArticleContentUpdatedEvent:
+		// Aktualisiere das bestehende ReadModel.
+		currentArticle, ok := h.articles[e.ID]
+		if !ok {
+			// Falls das ReadModel nicht existiert, könnte es ein Hinweis auf eine verspätete Event-Verarbeitung sein
+			// oder der Handler wurde gestartet, nachdem der Artikel bereits erstellt wurde.
+			// Für eine robuste Lösung könnte man hier das ReadModel aus dem Event erstellen.
+			// Wir loggen eine Warnung und erstellen es neu, falls es fehlt.
+			log.Printf("WARNUNG: ArticleUpdatedEvent für nicht existierendes ReadModel ID %s empfangen. ReadModel wird neu erstellt.", e.ID)
+			currentArticle = readmodels.ArticleReadModel{ID: e.ID, Version: -1} // Angenommene Version vor dem ersten Update
+		}
+
+		// Stelle sicher, dass das Update-Event neuer ist als der aktuelle Stand des Readmodels.
+		// e.Version ist die Version des Aggregats NACH diesem Update-Event.
+		if e.Version > currentArticle.Version {
 			currentArticle.Content = e.Content
 			currentArticle.Version = e.Version // Aktualisiere die Version des ReadModels auf die Version des Events
 			h.articles[e.ID] = currentArticle
 			log.Printf("ReadModel für Artikel %s aktualisiert (Version %d): %+v", e.ID, e.Version, currentArticle)
 		} else {
-            log.Printf("INFO: Veraltetes oder gleichwertiges ArticleUpdatedEvent für ReadModel ID %s empfangen (EventVersion: %d, ReadModelVersion: %d). Ignoriert.", e.ID, e.Version, currentArticle.Version)
-        }
+			log.Printf("INFO: Veraltetes oder gleichwertiges ArticleUpdatedEvent für ReadModel ID %s empfangen (EventVersion: %d, ReadModelVersion: %d). Ignoriert.", e.ID, e.Version, currentArticle.Version)
+		}
+
+	case *events.ArticlePriceUpdatedEvent:
+		// Aktualisiere das bestehende ReadModel.
+		currentArticle, ok := h.articles[e.ID]
+		if !ok {
+			// Falls das ReadModel nicht existiert, könnte es ein Hinweis auf eine verspätete Event-Verarbeitung sein
+			// oder der Handler wurde gestartet, nachdem der Artikel bereits erstellt wurde.
+			// Für eine robuste Lösung könnte man hier das ReadModel aus dem Event erstellen.
+			// Wir loggen eine Warnung und erstellen es neu, falls es fehlt.
+			log.Printf("WARNUNG: ArticleUpdatedEvent für nicht existierendes ReadModel ID %s empfangen. ReadModel wird neu erstellt.", e.ID)
+			currentArticle = readmodels.ArticleReadModel{ID: e.ID, Version: -1} // Angenommene Version vor dem ersten Update
+		}
+
+		// Stelle sicher, dass das Update-Event neuer ist als der aktuelle Stand des Readmodels.
+		// e.Version ist die Version des Aggregats NACH diesem Update-Event.
+		if e.Version > currentArticle.Version {
+			currentArticle.Price = e.Price
+			currentArticle.Version = e.Version // Aktualisiere die Version des ReadModels auf die Version des Events
+			h.articles[e.ID] = currentArticle
+			log.Printf("ReadModel für Artikel %s aktualisiert (Version %d): %+v", e.ID, e.Version, currentArticle)
+		} else {
+			log.Printf("INFO: Veraltetes oder gleichwertiges ArticleUpdatedEvent für ReadModel ID %s empfangen (EventVersion: %d, ReadModelVersion: %d). Ignoriert.", e.ID, e.Version, currentArticle.Version)
+		}
 
 	case *events.ArticleDeletedEvent:
 		// Entferne das ReadModel.
@@ -250,7 +384,7 @@ func (h *ArticleEventHandler) HandleEvent(event interface{}) error {
 		} else {
 			log.Printf("WARNUNG: ArticleDeletedEvent für nicht existierendes ReadModel ID %s empfangen (EventVersion: %d).", e.ID, e.Version)
 		}
-	
+
 	default:
 		// Unbekanntes Event, ignoriere es oder logge es.
 		log.Printf("Unbekanntes Event im ArticleEventHandler empfangen: %T", event)
@@ -277,11 +411,11 @@ func (h *ArticleQueryHandler) GetArticleByID(id string) (readmodels.ArticleReadM
 	h.eventHandler.mu.RLock() // Lesesperre auf der Mutex des EventHandlers
 	defer h.eventHandler.mu.RUnlock()
 
-	article, ok := h.eventHandler.articles[id]
+	existingArticle, ok := h.eventHandler.articles[id]
 	if !ok {
 		return readmodels.ArticleReadModel{}, fmt.Errorf("artikel mit ID %s nicht gefunden", id)
 	}
-	return article, nil
+	return existingArticle, nil
 }
 
 // GetAllArticles ruft alle Artikel-ReadModels ab.
@@ -295,8 +429,8 @@ func (h *ArticleQueryHandler) GetAllArticles() ([]readmodels.ArticleReadModel, e
 	}
 
 	articles := make([]readmodels.ArticleReadModel, 0, len(h.eventHandler.articles))
-	for _, article := range h.eventHandler.articles {
-		articles = append(articles, article)
+	for _, existingArticle := range h.eventHandler.articles {
+		articles = append(articles, existingArticle)
 	}
 	return articles, nil
 }

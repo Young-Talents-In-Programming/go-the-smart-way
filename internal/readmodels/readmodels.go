@@ -9,6 +9,8 @@ type ArticleReadModel struct {
 	Title string
 	// Content ist der Inhalt des Artikels.
 	Content string
+	// Price ist deer Preis des Artikels.
+	Price float64
 	// Version gibt die Version des Aggregats an, auf der dieses ReadModel basiert.
 	// Dies hilft bei der Handhabung von out-of-order Events oder bei der Implementierung
 	// von Optimistic Locking auf der Lese-Seite, falls erforderlich.
