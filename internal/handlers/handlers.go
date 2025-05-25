@@ -13,17 +13,22 @@ import (
 	"log"
 )
 
+// EventHandler defines the interface for handling events.
+type EventHandler interface {
+	HandleEvent(event interface{}) error
+}
+
 // ArticleCommandHandler verarbeitet Artikel-bezogene Commands.
 type ArticleCommandHandler struct {
 	eventStore   eventstore.EventStore
-	eventHandler *ArticleEventHandler // Hinzugefügt für direkte Event-Weiterleitung
+	eventHandler EventHandler // Changed to use the interface
 }
 
 // NewArticleCommandHandler erstellt einen neuen ArticleCommandHandler.
-func NewArticleCommandHandler(es eventstore.EventStore, eh *ArticleEventHandler) *ArticleCommandHandler {
+func NewArticleCommandHandler(es eventstore.EventStore, eh EventHandler) *ArticleCommandHandler { // Changed to accept the interface
 	return &ArticleCommandHandler{
 		eventStore:   es,
-		eventHandler: eh, // Hinzugefügt
+		eventHandler: eh,
 	}
 }
 
@@ -86,7 +91,7 @@ func (h *ArticleCommandHandler) HandleUpdateArticle(cmd any) error {
 func (h *ArticleCommandHandler) handleUpdateArticleTitle(cmd commands.UpdateArticleTitleCommand) error {
 	aggregate, err := h.loadAggregate(cmd.ID)
 	if err != nil {
-		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticleCommand: %w", cmd.ID, err)
+		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticleTitleCommand: %w", cmd.ID, err)
 	}
 
 	// Die Version des geladenen Aggregats ist die erwartete Version für den Optimistic Lock.
@@ -122,7 +127,7 @@ func (h *ArticleCommandHandler) handleUpdateArticleTitle(cmd commands.UpdateArti
 func (h *ArticleCommandHandler) handleUpdateArticleContent(cmd commands.UpdateArticleContentCommand) error {
 	aggregate, err := h.loadAggregate(cmd.ID)
 	if err != nil {
-		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticleCommand: %w", cmd.ID, err)
+		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticleContentCommand: %w", cmd.ID, err)
 	}
 
 	// Die Version des geladenen Aggregats ist die erwartete Version für den Optimistic Lock.
@@ -158,7 +163,7 @@ func (h *ArticleCommandHandler) handleUpdateArticleContent(cmd commands.UpdateAr
 func (h *ArticleCommandHandler) handleUpdateArticlePrice(cmd commands.UpdateArticlePriceCommand) error {
 	aggregate, err := h.loadAggregate(cmd.ID)
 	if err != nil {
-		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticleCommand: %w", cmd.ID, err)
+		return fmt.Errorf("fehler beim Laden des Aggregats %s für UpdateArticlePriceCommand: %w", cmd.ID, err)
 	}
 
 	// Die Version des geladenen Aggregats ist die erwartete Version für den Optimistic Lock.
