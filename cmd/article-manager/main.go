@@ -37,9 +37,9 @@ func (a *App) handleCreateArticle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Title   string  `json:"title"`
-		Content string  `json:"content"`
-		Price   float64 `json:"price"`
+		Title   *string  `json:"title"`   // Pointer to distinguish missing from empty
+		Content *string  `json:"content"` // Pointer to distinguish missing from empty
+		Price   *float64 `json:"price"`   // Pointer to distinguish missing from zero
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -47,12 +47,20 @@ func (a *App) handleCreateArticle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Title == "" || req.Content == "" {
-		http.Error(w, "Titel und Inhalt dürfen nicht leer sein", http.StatusBadRequest)
+	// Validate required fields
+	if req.Title == nil || *req.Title == "" {
+		http.Error(w, "Titel ist erforderlich und darf nicht leer sein", http.StatusBadRequest)
 		return
 	}
-
-	if req.Price < 0.0 {
+	if req.Content == nil || *req.Content == "" {
+		http.Error(w, "Inhalt ist erforderlich und darf nicht leer sein", http.StatusBadRequest)
+		return
+	}
+	if req.Price == nil {
+		http.Error(w, "Preis ist erforderlich", http.StatusBadRequest)
+		return
+	}
+	if *req.Price < 0.0 {
 		http.Error(w, "Preis darf nicht negativ sein", http.StatusBadRequest)
 		return
 	}
@@ -60,9 +68,9 @@ func (a *App) handleCreateArticle(w http.ResponseWriter, r *http.Request) {
 	articleID := uuid.New().String()
 	cmd := commands.CreateArticleCommand{
 		ID:      articleID,
-		Title:   req.Title,
-		Content: req.Content,
-		Price:   req.Price,
+		Title:   *req.Title,
+		Content: *req.Content,
+		Price:   *req.Price,
 	}
 
 	if err := a.commandHandler.HandleCreateArticle(cmd); err != nil {
@@ -108,37 +116,89 @@ func (a *App) handleUpdateArticle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Title   string  `json:"title"`
-		Content string  `json:"content"`
-		Price   float64 `json:"price"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var updatePayload map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&updatePayload); err != nil {
 		http.Error(w, "Fehler beim Parsen des JSON-Requests: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	var cmds []interface{}
 
-	if req.Title != "" {
-		cmds = append(cmds, commands.UpdateArticleTitleCommand{
-			ID:    id,
-			Title: req.Title,
-		})
+	// Validate and prepare commands based on payload
+	if titleVal, ok := updatePayload["title"]; ok {
+		titleStr, isString := titleVal.(string)
+		if !isString {
+			http.Error(w, "Titel muss ein String sein", http.StatusBadRequest)
+			return
+		}
+		if titleStr == "" {
+			http.Error(w, "Titel darf nicht leer sein, wenn er aktualisiert wird", http.StatusBadRequest)
+			return
+		}
+		cmds = append(cmds, commands.UpdateArticleTitleCommand{ID: id, Title: titleStr})
 	}
-	if req.Content != "" {
-		cmds = append(cmds, commands.UpdateArticleContentCommand{
-			ID:      id,
-			Content: req.Content,
-		})
+
+	if contentVal, ok := updatePayload["content"]; ok {
+		contentStr, isString := contentVal.(string)
+		if !isString {
+			http.Error(w, "Inhalt muss ein String sein", http.StatusBadRequest)
+			return
+		}
+		if contentStr == "" {
+			http.Error(w, "Inhalt darf nicht leer sein, wenn er aktualisiert wird", http.StatusBadRequest)
+			return
+		}
+		cmds = append(cmds, commands.UpdateArticleContentCommand{ID: id, Content: contentStr})
 	}
-	if req.Price > 0.0 {
-		cmds = append(cmds, commands.UpdateArticlePriceCommand{
-			ID:    id,
-			Price: req.Price,
-		})
+
+	if priceVal, ok := updatePayload["price"]; ok {
+		priceFloat, isFloat := priceVal.(float64)
+		if !isFloat {
+			// Allow integers to be decoded as float64
+			priceInt, isInt := priceVal.(int)
+			if isInt {
+				priceFloat = float64(priceInt)
+				isFloat = true
+			} else {
+				priceInt32, isInt32 := priceVal.(int32)
+				if isInt32 {
+					priceFloat = float64(priceInt32)
+					isFloat = true
+				} else {
+					priceInt64, isInt64 := priceVal.(int64)
+					if isInt64 {
+						priceFloat = float64(priceInt64)
+						isFloat = true
+					}
+				}
+			}
+		}
+
+
+		if !isFloat {
+			http.Error(w, "Preis muss eine gültige Zahl sein", http.StatusBadRequest)
+			return
+		}
+		if priceFloat < 0.0 {
+			http.Error(w, "Preis darf nicht negativ sein", http.StatusBadRequest)
+			return
+		}
+		cmds = append(cmds, commands.UpdateArticlePriceCommand{ID: id, Price: priceFloat})
 	}
+	
+	if len(cmds) == 0 {
+		// No fields to update were provided, or they didn't pass initial checks (e.g. empty strings were not added)
+		// Depending on desired behavior, this could be an error or a no-op.
+		// For this exercise, let's consider it a Bad Request if the payload is empty or contains only unsupported fields.
+		// However, if the payload has valid fields but they just don't trigger any command (e.g. {"price": 0} if we only allow >0),
+		// then no command is generated, and below it will just fetch and return the article.
+		// The current tests expect a 400 if the update is invalid (e.g. negative price).
+		// If the payload is valid JSON but contains no updatable fields (e.g. {"unknown_field": "value"}),
+		// `cmds` will be empty.
+		// Let's assume for now that if `cmds` is empty after processing, it's not an error but a no-op.
+		// The specific test failures (e.g. sending {"price": -5.0}) should be caught by the explicit checks above.
+	}
+
 
 	for _, cmd := range cmds {
 		if err := a.commandHandler.HandleUpdateArticle(cmd); err != nil {

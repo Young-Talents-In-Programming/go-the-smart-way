@@ -70,7 +70,7 @@ func TestHandleCreateArticle_Success(t *testing.T) {
 	app := setupTestApp()
 	router := setupTestRouter(app)
 
-	payload := map[string]string{"title": "Test API Title", "content": "Test API Content"}
+	payload := map[string]interface{}{"title": "Test API Title", "content": "Test API Content", "price": 10.99}
 	jsonPayload, _ := json.Marshal(payload)
 
 	req, _ := http.NewRequest("POST", "/articles", bytes.NewBuffer(jsonPayload))
@@ -93,6 +93,9 @@ func TestHandleCreateArticle_Success(t *testing.T) {
 	}
 	if createdArticle.Content != payload["content"] {
 		t.Errorf("handler returned unexpected content: got '%s' want '%s'", createdArticle.Content, payload["content"])
+	}
+	if createdArticle.Price != payload["price"] {
+		t.Errorf("handler returned unexpected price: got '%v' want '%v'", createdArticle.Price, payload["price"])
 	}
 	if createdArticle.ID == "" {
 		t.Error("handler returned empty ID")
@@ -123,12 +126,14 @@ func TestHandleCreateArticle_BadRequest_MissingFields(t *testing.T) {
 
 	testCases := []struct {
 		name    string
-		payload map[string]string
+		payload interface{}
 	}{
-		{"MissingTitle", map[string]string{"content": "Some Content"}},
-		{"MissingContent", map[string]string{"title": "Some Title"}},
-		{"EmptyTitle", map[string]string{"title": "", "content": "Some Content"}},
-		{"EmptyContent", map[string]string{"title": "Some Title", "content": ""}},
+		{"MissingTitle", map[string]interface{}{"content": "Some Content", "price": 10.99}},
+		{"MissingContent", map[string]interface{}{"title": "Some Title", "price": 10.99}},
+		{"MissingPrice", map[string]interface{}{"title": "Some Title", "content": "Some Content"}},
+		{"EmptyTitle", map[string]interface{}{"title": "", "content": "Some Content", "price": 10.99}},
+		{"EmptyContent", map[string]interface{}{"title": "Some Title", "content": "", "price": 10.99}},
+		{"NegativePrice", map[string]interface{}{"title": "Some Title", "content": "Some Content", "price": -1.0}},
 	}
 
 	for _, tc := range testCases {
@@ -153,11 +158,11 @@ func TestHandleGetArticleByID_Success(t *testing.T) {
 	router := setupTestRouter(app)
 
 	articleID := uuid.New().String()
-	cmd := commands.CreateArticleCommand{ID: articleID, Title: "Title Get", Content: "Content Get"}
-	
+	cmd := commands.CreateArticleCommand{ID: articleID, Title: "Title Get", Content: "Content Get", Price: 12.34}
+
 	// Manually create article state
 	agg := article.NewArticleAggregate(cmd.ID) // Aggregate version is -1
-	_ = agg.HandleCreateArticleCommand(cmd.ID, cmd.Title, cmd.Content) // Aggregate version becomes 0
+	_ = agg.HandleCreateArticleCommand(cmd.ID, cmd.Title, cmd.Content, cmd.Price) // Aggregate version becomes 0
 	_ = app.eventStore.SaveEvents(agg.ID, agg.GetChanges(), -1) // Store expects -1 for new
 	for _, event := range agg.GetChanges() {
 		_ = app.eventHandler.HandleEvent(event) // Event handler updates read model
@@ -181,6 +186,12 @@ func TestHandleGetArticleByID_Success(t *testing.T) {
 	}
 	if fetchedArticle.Title != cmd.Title {
 		t.Errorf("unexpected article Title: got %s want %s", fetchedArticle.Title, cmd.Title)
+	}
+	if fetchedArticle.Content != cmd.Content { // Added content check for completeness
+		t.Errorf("unexpected article Content: got %s want %s", fetchedArticle.Content, cmd.Content)
+	}
+	if fetchedArticle.Price != cmd.Price {
+		t.Errorf("unexpected article Price: got %f want %f", fetchedArticle.Price, cmd.Price)
 	}
 	if fetchedArticle.Version != 0 {
 		t.Errorf("unexpected article Version: got %d want %d", fetchedArticle.Version, 0)
@@ -228,17 +239,17 @@ func TestHandleGetAllArticles_Success_WithData(t *testing.T) {
 
 	// Create two articles
 	articleID1 := uuid.New().String()
-	cmd1 := commands.CreateArticleCommand{ID: articleID1, Title: "Article 1", Content: "Content 1"}
+	cmd1 := commands.CreateArticleCommand{ID: articleID1, Title: "Article 1", Content: "Content 1", Price: 5.99}
 	agg1 := article.NewArticleAggregate(cmd1.ID)
-	_ = agg1.HandleCreateArticleCommand(cmd1.ID, cmd1.Title, cmd1.Content)
+	_ = agg1.HandleCreateArticleCommand(cmd1.ID, cmd1.Title, cmd1.Content, cmd1.Price)
 	_ = app.eventStore.SaveEvents(agg1.ID, agg1.GetChanges(), -1)
 	for _, event := range agg1.GetChanges() { _ = app.eventHandler.HandleEvent(event) }
 	agg1.ClearChanges()
 
 	articleID2 := uuid.New().String()
-	cmd2 := commands.CreateArticleCommand{ID: articleID2, Title: "Article 2", Content: "Content 2"}
+	cmd2 := commands.CreateArticleCommand{ID: articleID2, Title: "Article 2", Content: "Content 2", Price: 15.99}
 	agg2 := article.NewArticleAggregate(cmd2.ID)
-	_ = agg2.HandleCreateArticleCommand(cmd2.ID, cmd2.Title, cmd2.Content)
+	_ = agg2.HandleCreateArticleCommand(cmd2.ID, cmd2.Title, cmd2.Content, cmd2.Price)
 	_ = app.eventStore.SaveEvents(agg2.ID, agg2.GetChanges(), -1)
 	for _, event := range agg2.GetChanges() { _ = app.eventHandler.HandleEvent(event) }
 	agg2.ClearChanges()
@@ -258,14 +269,34 @@ func TestHandleGetAllArticles_Success_WithData(t *testing.T) {
 	if len(articles) != 2 {
 		t.Fatalf("expected 2 articles, got %d", len(articles))
 	}
-	// Basic check for presence
-	found1, found2 := false, false
+	// Basic check for presence and data
+	articleMap := make(map[string]readmodels.ArticleReadModel)
 	for _, art := range articles {
-		if art.ID == articleID1 { found1 = true }
-		if art.ID == articleID2 { found2 = true }
+		articleMap[art.ID] = art
 	}
-	if !found1 || !found2 {
-		t.Errorf("expected both articles to be present. Found1: %t, Found2: %t", found1, found2)
+
+	art1, ok1 := articleMap[articleID1]
+	if !ok1 {
+		t.Errorf("Article with ID %s not found in response", articleID1)
+	} else {
+		if art1.Title != cmd1.Title {
+			t.Errorf("Article 1 Title mismatch: got %s, want %s", art1.Title, cmd1.Title)
+		}
+		if art1.Price != cmd1.Price {
+			t.Errorf("Article 1 Price mismatch: got %f, want %f", art1.Price, cmd1.Price)
+		}
+	}
+
+	art2, ok2 := articleMap[articleID2]
+	if !ok2 {
+		t.Errorf("Article with ID %s not found in response", articleID2)
+	} else {
+		if art2.Title != cmd2.Title {
+			t.Errorf("Article 2 Title mismatch: got %s, want %s", art2.Title, cmd2.Title)
+		}
+		if art2.Price != cmd2.Price {
+			t.Errorf("Article 2 Price mismatch: got %f, want %f", art2.Price, cmd2.Price)
+		}
 	}
 }
 
@@ -275,16 +306,26 @@ func TestHandleUpdateArticle_Success(t *testing.T) {
 	router := setupTestRouter(app)
 
 	articleID := uuid.New().String()
+	initialPrice := 7.77
 	// Pre-populate article
-	cmdCreate := commands.CreateArticleCommand{ID: articleID, Title: "Original Title", Content: "Original Content"}
+	cmdCreate := commands.CreateArticleCommand{ID: articleID, Title: "Original Title", Content: "Original Content", Price: initialPrice}
 	agg := article.NewArticleAggregate(cmdCreate.ID)
-	_ = agg.HandleCreateArticleCommand(cmdCreate.ID, cmdCreate.Title, cmdCreate.Content) // version 0
+	_ = agg.HandleCreateArticleCommand(cmdCreate.ID, cmdCreate.Title, cmdCreate.Content, cmdCreate.Price) // version 0
 	_ = app.eventStore.SaveEvents(agg.ID, agg.GetChanges(), -1)
 	for _, event := range agg.GetChanges() { _ = app.eventHandler.HandleEvent(event) }
 	agg.ClearChanges()
 
+	updatedTitle := "Updated Title Completely"
+	updatedContent := "Updated Content Completely"
+	updatedPrice := 15.99
 
-	updatePayload := map[string]string{"title": "Updated Title", "content": "Updated Content"}
+	// Simulate partial updates by sending only the fields to be changed
+	// Based on main.go, the handler expects a map[string]interface{} where keys are field names
+	updatePayload := map[string]interface{}{
+		"title":   updatedTitle,   // This will generate an UpdateArticleTitleCommand
+		"content": updatedContent, // This will generate an UpdateArticleContentCommand
+		"price":   updatedPrice,   // This will generate an UpdateArticlePriceCommand
+	}
 	jsonPayload, _ := json.Marshal(updatePayload)
 
 	req, _ := http.NewRequest("PUT", "/articles/"+articleID, bytes.NewBuffer(jsonPayload))
@@ -303,14 +344,23 @@ func TestHandleUpdateArticle_Success(t *testing.T) {
 	if updatedArticle.ID != articleID {
 		t.Errorf("ID mismatch: got %s", updatedArticle.ID)
 	}
-	if updatedArticle.Title != updatePayload["title"] {
-		t.Errorf("Title mismatch: got %s", updatedArticle.Title)
+	if updatedArticle.Title != updatedTitle {
+		t.Errorf("Title mismatch: got %s, want %s", updatedArticle.Title, updatedTitle)
 	}
-	if updatedArticle.Content != updatePayload["content"] {
-		t.Errorf("Content mismatch: got %s", updatedArticle.Content)
+	if updatedArticle.Content != updatedContent {
+		t.Errorf("Content mismatch: got %s, want %s", updatedArticle.Content, updatedContent)
 	}
-	if updatedArticle.Version != 1 { // Version should be incremented
-		t.Errorf("Version mismatch: got %d want %d", updatedArticle.Version, 1)
+	if updatedArticle.Price != updatedPrice {
+		t.Errorf("Price mismatch: got %f, want %f", updatedArticle.Price, updatedPrice)
+	}
+	// Each command (Title, Content, Price) will increment the version.
+	// Initial version is 0.
+	// After Title update: version 1
+	// After Content update: version 2
+	// After Price update: version 3
+	expectedVersion := 3
+	if updatedArticle.Version != expectedVersion {
+		t.Errorf("Version mismatch: got %d want %d", updatedArticle.Version, expectedVersion)
 	}
 }
 
@@ -347,18 +397,24 @@ func TestHandleUpdateArticle_BadRequest_MissingFields(t *testing.T) {
     router := setupTestRouter(app)
 	articleID := uuid.New().String()
 	// Pre-populate article so it exists for update attempt
-	cmdCreate := commands.CreateArticleCommand{ID: articleID, Title: "Original Title", Content: "Original Content"}
-	agg := article.NewArticleAggregate(cmdCreate.ID); _ = agg.HandleCreateArticleCommand(cmdCreate.ID, cmdCreate.Title, cmdCreate.Content); _ = app.eventStore.SaveEvents(agg.ID, agg.GetChanges(), -1); for _, event := range agg.GetChanges() { _ = app.eventHandler.HandleEvent(event) }; agg.ClearChanges()
+	cmdCreate := commands.CreateArticleCommand{ID: articleID, Title: "Original Title", Content: "Original Content", Price: 9.99}
+	agg := article.NewArticleAggregate(cmdCreate.ID)
+	_ = agg.HandleCreateArticleCommand(cmdCreate.ID, cmdCreate.Title, cmdCreate.Content, cmdCreate.Price)
+	_ = app.eventStore.SaveEvents(agg.ID, agg.GetChanges(), -1)
+	for _, event := range agg.GetChanges() { _ = app.eventHandler.HandleEvent(event) }
+	agg.ClearChanges()
 
 
     testCases := []struct {
 		name    string
-		payload map[string]string
+		payload map[string]interface{} 
 	}{
-		{"MissingTitle", map[string]string{"content": "Some Content"}},
-		{"MissingContent", map[string]string{"title": "Some Title"}},
-        {"EmptyTitle", map[string]string{"title": "", "content": "Some Content"}},
-		{"EmptyContent", map[string]string{"title": "Some Title", "content": ""}},
+		// These test individual invalid field updates via the partial update mechanism
+        {"EmptyTitleToUpdate", map[string]interface{}{"title": ""}}, 
+		{"EmptyContentToUpdate", map[string]interface{}{"content": ""}}, 
+		{"NegativePriceToUpdate", map[string]interface{}{"price": -5.0}}, 
+		// Test with a valid field and an invalid one to ensure atomicity or error handling
+		{"ValidTitleAndNegativePrice", map[string]interface{}{"title": "Good Title", "price": -2.0}},
 	}
     for _, tc := range testCases {
         t.Run(tc.name, func(t *testing.T) {
@@ -382,9 +438,9 @@ func TestHandleDeleteArticle_Success(t *testing.T) {
 
 	articleID := uuid.New().String()
 	// Pre-populate article
-	cmdCreate := commands.CreateArticleCommand{ID: articleID, Title: "To Be Deleted", Content: "Delete Me"}
+	cmdCreate := commands.CreateArticleCommand{ID: articleID, Title: "To Be Deleted", Content: "Delete Me", Price: 1.00}
 	agg := article.NewArticleAggregate(cmdCreate.ID)
-	_ = agg.HandleCreateArticleCommand(cmdCreate.ID, cmdCreate.Title, cmdCreate.Content)
+	_ = agg.HandleCreateArticleCommand(cmdCreate.ID, cmdCreate.Title, cmdCreate.Content, cmdCreate.Price)
 	_ = app.eventStore.SaveEvents(agg.ID, agg.GetChanges(), -1)
 	for _, event := range agg.GetChanges() { _ = app.eventHandler.HandleEvent(event) }
 	agg.ClearChanges()

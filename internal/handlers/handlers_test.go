@@ -102,6 +102,7 @@ func TestArticleCommandHandler_HandleCreateArticle(t *testing.T) {
 			ID:      newID(),
 			Title:   "New Article",
 			Content: "Some content",
+			Price:   9.99,
 		}
 
 		err := cmdHandler.HandleCreateArticle(cmd)
@@ -122,9 +123,9 @@ func TestArticleCommandHandler_HandleCreateArticle(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected ArticleCreatedEvent, got %T", mockES.SavedEvents[0])
 		}
-		if createdEvent.ID != cmd.ID || createdEvent.Title != cmd.Title || createdEvent.Content != cmd.Content {
-			t.Errorf("event content mismatch. Expected ID %s, Title %s, Content %s. Got ID %s, Title %s, Content %s",
-				cmd.ID, cmd.Title, cmd.Content, createdEvent.ID, createdEvent.Title, createdEvent.Content)
+		if createdEvent.ID != cmd.ID || createdEvent.Title != cmd.Title || createdEvent.Content != cmd.Content || createdEvent.Price != cmd.Price {
+			t.Errorf("event content mismatch. Expected ID %s, Title %s, Content %s, Price %f. Got ID %s, Title %s, Content %s, Price %f",
+				cmd.ID, cmd.Title, cmd.Content, cmd.Price, createdEvent.ID, createdEvent.Title, createdEvent.Content, createdEvent.Price)
 		}
 		if createdEvent.Version != 0 { // Version of the aggregate after creation
 			t.Errorf("expected createdEvent.Version to be 0, got %d", createdEvent.Version)
@@ -152,7 +153,7 @@ func TestArticleCommandHandler_HandleCreateArticle(t *testing.T) {
 			return expectedErr
 		}
 
-		cmd := commands.CreateArticleCommand{ID: newID(), Title: "Test", Content: "Test"}
+		cmd := commands.CreateArticleCommand{ID: newID(), Title: "Test", Content: "Test", Price: 5.55}
 		err := cmdHandler.HandleCreateArticle(cmd)
 
 		if err == nil {
@@ -179,7 +180,7 @@ func TestArticleCommandHandler_HandleCreateArticle(t *testing.T) {
 			return eventHandlerErr
 		}
 
-		cmd := commands.CreateArticleCommand{ID: newID(), Title: "Test", Content: "Test"}
+		cmd := commands.CreateArticleCommand{ID: newID(), Title: "Test", Content: "Test", Price: 6.66}
 		err := cmdHandler.HandleCreateArticle(cmd)
 
 		if err != nil { // Command part is successful, so handler should not return error
@@ -203,11 +204,13 @@ func TestArticleCommandHandler_HandleUpdateArticle(t *testing.T) {
 	cmdHandler := handlers.NewArticleCommandHandler(mockES, mockEH)
 	
 	articleID := newID()
+	initialPrice := 10.00
 	initialCreateEvent := &events.ArticleCreatedEvent{
-		ID: articleID, Title: "Initial Title", Content: "Initial Content", Version: 0, Timestamp: time.Now(),
+		ID: articleID, Title: "Initial Title", Content: "Initial Content", Price: initialPrice, Version: 0, Timestamp: time.Now(),
 	}
 
-	t.Run("Success", func(t *testing.T) {
+	// This test will be adapted to test UpdateArticleTitleCommand specifically
+	t.Run("Success_UpdateTitle", func(t *testing.T) {
 		mockES.Reset()
 		mockEH.Reset()
 
@@ -218,15 +221,17 @@ func TestArticleCommandHandler_HandleUpdateArticle(t *testing.T) {
 			return []interface{}{initialCreateEvent}, nil
 		}
 
-		cmd := commands.UpdateArticleCommand{
-			ID:      articleID,
-			Title:   "Updated Title",
-			Content: "Updated Content",
+		updatedTitle := "Updated Title"
+		// Send UpdateArticleTitleCommand
+		titleCmd := commands.UpdateArticleTitleCommand{
+			ID:    articleID,
+			Title: updatedTitle,
 		}
 
-		err := cmdHandler.HandleUpdateArticle(cmd)
+		// The main HandleUpdateArticle will receive this specific command
+		err := cmdHandler.HandleUpdateArticle(titleCmd)
 		if err != nil {
-			t.Fatalf("HandleUpdateArticle failed: %v", err)
+			t.Fatalf("HandleUpdateArticle(UpdateArticleTitleCommand) failed: %v", err)
 		}
 
 		if !mockES.GetEventsForAggCalled {
@@ -241,15 +246,17 @@ func TestArticleCommandHandler_HandleUpdateArticle(t *testing.T) {
 		if len(mockES.SavedEvents) != 1 {
 			t.Fatalf("expected 1 saved event, got %d", len(mockES.SavedEvents))
 		}
-		updatedEvent, ok := mockES.SavedEvents[0].(*events.ArticleUpdatedEvent)
+		// Expect ArticleTitleUpdatedEvent
+		titleUpdatedEvent, ok := mockES.SavedEvents[0].(*events.ArticleTitleUpdatedEvent)
 		if !ok {
-			t.Fatalf("expected ArticleUpdatedEvent, got %T", mockES.SavedEvents[0])
+			t.Fatalf("expected ArticleTitleUpdatedEvent, got %T", mockES.SavedEvents[0])
 		}
-		if updatedEvent.ID != cmd.ID || updatedEvent.Title != cmd.Title || updatedEvent.Content != cmd.Content {
-			t.Errorf("event content mismatch")
+		if titleUpdatedEvent.ID != titleCmd.ID || titleUpdatedEvent.Title != titleCmd.Title {
+			t.Errorf("event content mismatch. Expected ID %s, Title %s. Got ID %s, Title %s",
+				titleCmd.ID, titleCmd.Title, titleUpdatedEvent.ID, titleUpdatedEvent.Title)
 		}
-		if updatedEvent.Version != 1 { // Version after update (0 -> 1)
-			t.Errorf("expected updatedEvent.Version to be 1, got %d", updatedEvent.Version)
+		if titleUpdatedEvent.Version != 1 { // Version after update (0 -> 1)
+			t.Errorf("expected titleUpdatedEvent.Version to be 1, got %d", titleUpdatedEvent.Version)
 		}
 		if mockES.SavedExpectedVersion != 0 { // Expected version was 0 (version of loaded aggregate)
 			t.Errorf("expected SavedExpectedVersion 0, got %d", mockES.SavedExpectedVersion)
@@ -261,32 +268,37 @@ func TestArticleCommandHandler_HandleUpdateArticle(t *testing.T) {
 		if len(mockEH.HandledEvents) != 1 {
 			t.Fatalf("expected 1 handled event, got %d", len(mockEH.HandledEvents))
 		}
-		if mockEH.HandledEvents[0] != updatedEvent {
+		if mockEH.HandledEvents[0] != titleUpdatedEvent {
 			t.Error("event handler handled a different event instance")
 		}
 	})
 
-	t.Run("AggregateNotFound", func(t *testing.T) {
+	// This subtest needs to be adapted for a specific command or removed if generic updates are not supported.
+	// For now, let's assume it tests trying to update a non-existent aggregate with a Title command.
+	t.Run("AggregateNotFound_UpdateTitle", func(t *testing.T) {
 		mockES.Reset()
 		mockEH.Reset()
 
-		notFoundErrText := fmt.Sprintf("aggregat %s nicht gefunden: keine Events vorhanden", articleID)
+		// notFoundErrText := fmt.Sprintf("aggregat %s nicht gefunden: keine Events vorhanden", articleID) // This variable is unused
 		mockES.GetEventsForAggregateFunc = func(id string) ([]interface{}, error) {
 			return []interface{}{}, nil // Simulate not found by returning no events
 		}
 
-		cmd := commands.UpdateArticleCommand{ID: articleID, Title: "Update", Content: "Update"}
-		err := cmdHandler.HandleUpdateArticle(cmd)
+		titleCmd := commands.UpdateArticleTitleCommand{ID: articleID, Title: "Update Title For NonExistent"}
+		err := cmdHandler.HandleUpdateArticle(titleCmd) // Using the main dispatcher
 
 		if err == nil {
 			t.Fatal("expected an error, got nil")
 		}
-		// Check if the error message matches the expected one from loadAggregate
-		expectedWrappedError := fmt.Sprintf("fehler beim Laden des Aggregats %s für UpdateArticleCommand: %s", articleID, notFoundErrText)
+		// Check if the error message matches the expected one from loadAggregate for UpdateArticleTitleCommand
+		// The error message from loadAggregateAndHandle does not currently include the command type.
+		// It's "fehler beim Laden des Aggregats %s: %w"
+		// The specific error from aggregate.Rehydrate is "aggregat %s nicht gefunden: keine Events vorhanden"
+		expectedLoadErr := fmt.Sprintf("aggregat %s nicht gefunden: keine Events vorhanden", articleID) // articleID is available in this scope
+		expectedWrappedError := fmt.Sprintf("fehler beim Laden des Aggregats %s für UpdateArticleTitleCommand: %s", articleID, expectedLoadErr)
 		if err.Error() != expectedWrappedError {
 			t.Errorf("expected error message '%s', got '%s'", expectedWrappedError, err.Error())
 		}
-
 
 		if !mockES.GetEventsForAggCalled {
 			t.Error("expected GetEventsForAggregate to be called")
@@ -299,24 +311,29 @@ func TestArticleCommandHandler_HandleUpdateArticle(t *testing.T) {
 		}
 	})
 
-	t.Run("OptimisticLockError", func(t *testing.T) {
+    // This subtest also needs to be adapted for a specific command.
+	// Let's test optimistic lock for UpdateArticleTitleCommand.
+	t.Run("OptimisticLockError_UpdateTitle", func(t *testing.T) {
 		mockES.Reset()
 		mockEH.Reset()
 		
 		mockES.GetEventsForAggregateFunc = func(id string) ([]interface{}, error) {
-			return []interface{}{initialCreateEvent}, nil
+			return []interface{}{initialCreateEvent}, nil // Aggregate is at version 0
 		}
 		optimisticLockErr := errors.New("optimistic lock error: version mismatch")
 		mockES.SaveEventsFunc = func(aggregateID string, evts []interface{}, expectedVersion int) error {
-			return optimisticLockErr
+			// This mock simulates that SaveEvents itself returns the optimistic lock error.
+			// In a real scenario, this error originates from the eventstore's SaveEvents method.
+			return optimisticLockErr 
 		}
 
-		cmd := commands.UpdateArticleCommand{ID: articleID, Title: "Update", Content: "Update"}
-		err := cmdHandler.HandleUpdateArticle(cmd)
+		titleCmd := commands.UpdateArticleTitleCommand{ID: articleID, Title: "Update Title With Lock Error"}
+		err := cmdHandler.HandleUpdateArticle(titleCmd)
 
 		if err == nil {
 			t.Fatal("expected an error, got nil")
 		}
+		// The error from saveAndPublishEvents is "fehler beim Speichern der Events für Aggregat %s (erwartete Version %d): %w"
         expectedWrappedError := fmt.Sprintf("fehler beim Speichern der Events für Aggregat %s (erwartete Version 0): %s", articleID, optimisticLockErr.Error())
 		if err.Error() != expectedWrappedError {
 			t.Errorf("expected error message '%s', got '%s'", expectedWrappedError, err.Error())
@@ -340,8 +357,9 @@ func TestArticleCommandHandler_HandleDeleteArticle(t *testing.T) {
 	cmdHandler := handlers.NewArticleCommandHandler(mockES, mockEH)
 
 	articleID := newID()
-	initialCreateEvent := &events.ArticleCreatedEvent{
-		ID: articleID, Title: "Initial Title", Content: "Initial Content", Version: 0, Timestamp: time.Now(),
+	initialDeletePrice := 3.33
+	initialCreateEventForDelete := &events.ArticleCreatedEvent{
+		ID: articleID, Title: "Initial Title", Content: "Initial Content", Price: initialDeletePrice, Version: 0, Timestamp: time.Now(),
 	}
 
 	t.Run("Success", func(t *testing.T) {
@@ -352,7 +370,7 @@ func TestArticleCommandHandler_HandleDeleteArticle(t *testing.T) {
 			if id != articleID {
 				t.Fatalf("GetEventsForAggregate called with wrong ID. Expected %s, got %s", articleID, id)
 			}
-			return []interface{}{initialCreateEvent}, nil
+			return []interface{}{initialCreateEventForDelete}, nil
 		}
 
 		cmd := commands.DeleteArticleCommand{ID: articleID}
@@ -404,21 +422,41 @@ func TestArticleCommandHandler_HandleDeleteArticle(t *testing.T) {
 
 
 // --- Helper functions for creating events ---
-func newArticleCreatedEventForTest(id, title, content string, version int) *events.ArticleCreatedEvent {
+func newArticleCreatedEventForTest(id, title, content string, price float64, version int) *events.ArticleCreatedEvent {
 	return &events.ArticleCreatedEvent{
 		ID:        id,
 		Title:     title,
+		Content:   content,
+		Price:     price,
+		Timestamp: time.Now(),
+		Version:   version,
+	}
+}
+
+// Renamed from newArticleUpdatedEventForTest
+func newArticleTitleUpdatedEventForTest(id, title string, version int) *events.ArticleTitleUpdatedEvent {
+	return &events.ArticleTitleUpdatedEvent{
+		ID:        id,
+		Title:     title,
+		Timestamp: time.Now(),
+		Version:   version,
+	}
+}
+
+// Added for completeness, though not strictly required by price tests yet
+func newArticleContentUpdatedEventForTest(id, content string, version int) *events.ArticleContentUpdatedEvent {
+	return &events.ArticleContentUpdatedEvent{
+		ID:        id,
 		Content:   content,
 		Timestamp: time.Now(),
 		Version:   version,
 	}
 }
 
-func newArticleUpdatedEventForTest(id, title, content string, version int) *events.ArticleUpdatedEvent {
-	return &events.ArticleUpdatedEvent{
+func newArticlePriceUpdatedEventForTest(id string, price float64, version int) *events.ArticlePriceUpdatedEvent {
+	return &events.ArticlePriceUpdatedEvent{
 		ID:        id,
-		Title:     title,
-		Content:   content,
+		Price:     price,
 		Timestamp: time.Now(),
 		Version:   version,
 	}
@@ -439,10 +477,12 @@ func TestArticleEventHandlerAndQueryHandler(t *testing.T) {
 	articleID1 := newID()
 	initialTitle1 := "Initial Title 1"
 	initialContent1 := "Initial Content 1"
+	initialPrice1 := 11.11
 
 	articleID2 := newID()
 	initialTitle2 := "Initial Title 2"
 	initialContent2 := "Initial Content 2"
+	initialPrice2 := 22.22
 
 
 	// These handlers will be re-initialized for some test groups for isolation
@@ -459,7 +499,7 @@ func TestArticleEventHandlerAndQueryHandler(t *testing.T) {
 	t.Run("EventHandler_ArticleCreated", func(t *testing.T) {
 		setupSequential() // Fresh handlers
 
-		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, 0)
+		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, initialPrice1, 0)
 		err := eventHandler.HandleEvent(createdEvent)
 		if err != nil {
 			t.Fatalf("HandleEvent(created) failed: %v", err)
@@ -478,97 +518,143 @@ func TestArticleEventHandlerAndQueryHandler(t *testing.T) {
 		if rm.Content != initialContent1 {
 			t.Errorf("expected Content '%s', got '%s'", initialContent1, rm.Content)
 		}
+		if rm.Price != initialPrice1 {
+			t.Errorf("expected Price %f, got %f", initialPrice1, rm.Price)
+		}
 		if rm.Version != 0 {
 			t.Errorf("expected Version 0, got %d", rm.Version)
 		}
 	})
 
-	t.Run("EventHandler_ArticleUpdated_Success", func(t *testing.T) {
+	t.Run("EventHandler_ArticleTitleUpdated_Success", func(t *testing.T) {
 		setupSequential() // Start fresh for this test sequence
 		// Create initial article
-		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, 0)
+		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, initialPrice1, 0)
 		eventHandler.HandleEvent(createdEvent)
 
-
 		updatedTitle := "Updated Title 1"
-		updatedContent := "Updated Content 1"
-		updatedEvent := newArticleUpdatedEventForTest(articleID1, updatedTitle, updatedContent, 1)
+		// Use newArticleTitleUpdatedEventForTest
+		updatedTitleEvent := newArticleTitleUpdatedEventForTest(articleID1, updatedTitle, 1)
 		
-		err := eventHandler.HandleEvent(updatedEvent)
+		err := eventHandler.HandleEvent(updatedTitleEvent)
 		if err != nil {
-			t.Fatalf("HandleEvent(updated) failed: %v", err)
+			t.Fatalf("HandleEvent(title updated) failed: %v", err)
 		}
 
 		rm, err := queryHandler.GetArticleByID(articleID1)
 		if err != nil {
-			t.Fatalf("GetArticleByID after update failed: %v", err)
+			t.Fatalf("GetArticleByID after title update failed: %v", err)
 		}
 		if rm.Title != updatedTitle {
 			t.Errorf("expected updated Title '%s', got '%s'", updatedTitle, rm.Title)
 		}
-		if rm.Content != updatedContent {
-			t.Errorf("expected updated Content '%s', got '%s'", updatedContent, rm.Content)
+		if rm.Content != initialContent1 { // Content should remain the same
+			t.Errorf("expected Content '%s', got '%s'", initialContent1, rm.Content)
 		}
-		if rm.Version != 1 {
-			t.Errorf("expected Version 1 after update, got %d", rm.Version)
+		if rm.Price != initialPrice1 { // Price should remain the same
+			t.Errorf("expected Price %f, got %f", initialPrice1, rm.Price)
+		}
+		if rm.Version != 1 { // Version should be updated
+			t.Errorf("expected Version 1 after title update, got %d", rm.Version)
 		}
 	})
     
-    t.Run("EventHandler_ArticleUpdated_StaleIgnored", func(t *testing.T) {
+	t.Run("EventHandler_ArticlePriceUpdated_Success", func(t *testing.T) {
+		setupSequential()
+		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, initialPrice1, 0)
+		eventHandler.HandleEvent(createdEvent)
+
+		updatedPrice := 15.99
+		updatedPriceEvent := newArticlePriceUpdatedEventForTest(articleID1, updatedPrice, 1)
+
+		err := eventHandler.HandleEvent(updatedPriceEvent)
+		if err != nil {
+			t.Fatalf("HandleEvent(price updated) failed: %v", err)
+		}
+		rm, err := queryHandler.GetArticleByID(articleID1)
+		if err != nil {
+			t.Fatalf("GetArticleByID after price update failed: %v", err)
+		}
+		if rm.Title != initialTitle1 { // Title should remain the same
+			t.Errorf("expected Title '%s', got '%s'", initialTitle1, rm.Title)
+		}
+		if rm.Price != updatedPrice {
+			t.Errorf("expected Price %f, got %f", updatedPrice, rm.Price)
+		}
+		if rm.Version != 1 {
+			t.Errorf("expected Version 1 after price update, got %d", rm.Version)
+		}
+	})
+
+    t.Run("EventHandler_ArticleUpdates_StaleIgnored", func(t *testing.T) {
 		setupSequential()
 		// Create initial article
-		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, 0)
+		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, initialPrice1, 0) // Version 0
 		eventHandler.HandleEvent(createdEvent)
-		// First update
-		firstUpdateTitle := "First Update Title"
-		firstUpdateEvent := newArticleUpdatedEventForTest(articleID1, firstUpdateTitle, "content v1", 1)
-		eventHandler.HandleEvent(firstUpdateEvent)
-
-
-        staleTitle := "Stale Title Update"
-		staleEvent := newArticleUpdatedEventForTest(articleID1, staleTitle, "stale content", 0) // Version 0 is older than current 1
 		
-		err := eventHandler.HandleEvent(staleEvent)
-		if err != nil {
-			t.Fatalf("HandleEvent(stale update) failed: %v", err) // Should not fail, just log and ignore
-		}
+		// First update (Title)
+		firstUpdateTitle := "First Update Title"
+		firstTitleUpdateEvent := newArticleTitleUpdatedEventForTest(articleID1, firstUpdateTitle, 1) // Version 1
+		eventHandler.HandleEvent(firstTitleUpdateEvent)
 
-        rm, err := queryHandler.GetArticleByID(articleID1)
+		// Second update (Price)
+		currentPrice := 50.55
+		secondPriceUpdateEvent := newArticlePriceUpdatedEventForTest(articleID1, currentPrice, 2) // Version 2
+		eventHandler.HandleEvent(secondPriceUpdateEvent)
+
+        // Try to apply stale Title update (version 0)
+		staleTitleEvent := newArticleTitleUpdatedEventForTest(articleID1, "Stale Title", 0) 
+		err := eventHandler.HandleEvent(staleTitleEvent)
 		if err != nil {
-			t.Fatalf("GetArticleByID after stale update failed: %v", err)
+			t.Fatalf("HandleEvent(stale title update) should not fail: %v", err) 
 		}
-        if rm.Title != firstUpdateTitle { // Title should be from the first update, not the stale one
+        rm, _ := queryHandler.GetArticleByID(articleID1)
+        if rm.Title != firstUpdateTitle { 
             t.Errorf("expected Title to be '%s' (from first update), got '%s'", firstUpdateTitle, rm.Title)
         }
-        if rm.Version != 1 { // Version should remain 1
-            t.Errorf("expected Version to be 1, got %d", rm.Version)
+        if rm.Version != 2 { 
+            t.Errorf("expected Version to be 2, got %d", rm.Version)
+        }
+		if rm.Price != currentPrice {
+			t.Errorf("expected Price to be %f, got %f", currentPrice, rm.Price)
+		}
+
+		// Try to apply stale Price update (version 1)
+		stalePriceEvent := newArticlePriceUpdatedEventForTest(articleID1, 9.99, 1)
+		err = eventHandler.HandleEvent(stalePriceEvent)
+		if err != nil {
+			t.Fatalf("HandleEvent(stale price update) should not fail: %v", err)
+		}
+		rm, _ = queryHandler.GetArticleByID(articleID1)
+        if rm.Price != currentPrice { 
+            t.Errorf("expected Price to be %f (from second update), got %f", currentPrice, rm.Price)
+        }
+        if rm.Version != 2 { 
+            t.Errorf("expected Version to be 2, got %d", rm.Version)
         }
 
-		// Test with same version
-		staleEventSameVersion := newArticleUpdatedEventForTest(articleID1, "Same Version Title", "same version content", 1)
-		err = eventHandler.HandleEvent(staleEventSameVersion)
+		// Try to apply Price update with current version (should also be ignored)
+		ignoredPriceEventSameVersion := newArticlePriceUpdatedEventForTest(articleID1, 100.00, 2)
+		err = eventHandler.HandleEvent(ignoredPriceEventSameVersion)
 		if err != nil {
-			t.Fatalf("HandleEvent(stale update with same version) failed: %v", err)
+			t.Fatalf("HandleEvent(ignored price update with same version) should not fail: %v", err)
 		}
-		rm, err = queryHandler.GetArticleByID(articleID1)
-		if err != nil {
-			t.Fatalf("GetArticleByID after stale update (same version) failed: %v", err)
-		}
-        if rm.Title != firstUpdateTitle { 
-            t.Errorf("expected Title to be '%s' (from first update), got '%s' after same version update", firstUpdateTitle, rm.Title)
+		rm, _ = queryHandler.GetArticleByID(articleID1)
+        if rm.Price != currentPrice { 
+            t.Errorf("expected Price to be %f, got %f, after ignored same version update", currentPrice, rm.Price)
         }
-        if rm.Version != 1 { 
-            t.Errorf("expected Version to be 1, got %d after same version update", rm.Version)
+        if rm.Version != 2 { 
+            t.Errorf("expected Version to be 2, got %d, after ignored same version update", rm.Version)
         }
     })
 
 	t.Run("EventHandler_ArticleDeleted", func(t *testing.T) {
 		setupSequential()
 		// Create initial article
-		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, 0)
+		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, initialPrice1, 0)
 		eventHandler.HandleEvent(createdEvent)
-		// Optional: Update it once
-		eventHandler.HandleEvent(newArticleUpdatedEventForTest(articleID1, "Before Delete", "Content", 1))
+		// Optional: Update its title once
+		eventHandler.HandleEvent(newArticleTitleUpdatedEventForTest(articleID1, "Before Delete", 1))
 
 		deletedEvent := newArticleDeletedEventForTest(articleID1, 2) // Version after delete is 2
 		err := eventHandler.HandleEvent(deletedEvent)
@@ -594,7 +680,7 @@ func TestArticleEventHandlerAndQueryHandler(t *testing.T) {
 	t.Run("EventHandler_UnknownEvent", func(t *testing.T) {
 		setupSequential()
 		// Create initial article
-		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, 0)
+		createdEvent := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, initialPrice1, 0)
 		eventHandler.HandleEvent(createdEvent)
 
 		err := eventHandler.HandleEvent("this is not an event type string")
@@ -606,7 +692,7 @@ func TestArticleEventHandlerAndQueryHandler(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetArticleByID after unknown event failed: %v", err)
 		}
-		if rm.Title != initialTitle1 || rm.Content != initialContent1 || rm.Version != 0 {
+		if rm.Title != initialTitle1 || rm.Content != initialContent1 || rm.Price != initialPrice1 || rm.Version != 0 {
 			t.Errorf("article state changed after unknown event. Got: %+v", rm)
 		}
 	})
@@ -627,8 +713,8 @@ func TestArticleEventHandlerAndQueryHandler(t *testing.T) {
 	t.Run("QueryHandler_GetAllArticles_Multiple", func(t *testing.T) {
 		setupSequential()
 
-		event1 := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, 0)
-		event2 := newArticleCreatedEventForTest(articleID2, initialTitle2, initialContent2, 0)
+		event1 := newArticleCreatedEventForTest(articleID1, initialTitle1, initialContent1, initialPrice1, 0)
+		event2 := newArticleCreatedEventForTest(articleID2, initialTitle2, initialContent2, initialPrice2, 0)
 		eventHandler.HandleEvent(event1)
 		eventHandler.HandleEvent(event2)
 
@@ -642,16 +728,35 @@ func TestArticleEventHandlerAndQueryHandler(t *testing.T) {
 
 		// Check for presence of both articles (order is not guaranteed)
 		found1, found2 := false, false
+		var art1Check, art2Check bool
 		for _, art := range articles {
-			if art.ID == articleID1 && art.Title == initialTitle1 {
-				found1 = true
+			if art.ID == articleID1 {
+				art1Check = true
+				if art.Title == initialTitle1 && art.Price == initialPrice1 {
+					found1 = true
+				} else {
+					t.Errorf("Article 1 data mismatch. Got Title: %s, Price: %f. Expected Title: %s, Price: %f",
+						art.Title, art.Price, initialTitle1, initialPrice1)
+				}
 			}
-			if art.ID == articleID2 && art.Title == initialTitle2 {
-				found2 = true
+			if art.ID == articleID2 {
+				art2Check = true
+				if art.Title == initialTitle2 && art.Price == initialPrice2 {
+					found2 = true
+				} else {
+					t.Errorf("Article 2 data mismatch. Got Title: %s, Price: %f. Expected Title: %s, Price: %f",
+						art.Title, art.Price, initialTitle2, initialPrice2)
+				}
 			}
 		}
-		if !found1 || !found2 {
-			t.Errorf("expected both articles to be present. Found1: %t, Found2: %t", found1, found2)
+		if !art1Check {
+			t.Errorf("Article 1 (ID: %s) not found in GetAllArticles result", articleID1)
+		}
+		if !art2Check {
+			t.Errorf("Article 2 (ID: %s) not found in GetAllArticles result", articleID2)
+		}
+		if !found1 || !found2 { // Redundant if artXCheck fails, but good for overall status
+			t.Errorf("expected both articles to be present with correct data. Found1 (correct data): %t, Found2 (correct data): %t", found1, found2)
 		}
 	})
 
@@ -665,5 +770,206 @@ func TestArticleEventHandlerAndQueryHandler(t *testing.T) {
 		if len(articles) != 0 {
 			t.Errorf("expected 0 articles for empty handler, got %d", len(articles))
 		}
+	})
+}
+
+// TestArticleCommandHandler_HandleUpdateArticlePrice is the new test function for price updates.
+// It mirrors the structure of the adapted TestArticleCommandHandler_HandleUpdateArticle (which now tests title updates).
+func TestArticleCommandHandler_HandleUpdateArticlePrice(t *testing.T) {
+	mockES := &MockEventStore{}
+	mockEH := &MockArticleEventHandler{}
+	cmdHandler := handlers.NewArticleCommandHandler(mockES, mockEH)
+
+	articleID := newID()
+	initialTitle := "Initial Title for Price Test"
+	initialContent := "Initial Content for Price Test"
+	initialPrice := 20.00
+	initialVersion := 0
+
+	initialCreateEventForPriceUpdate := newArticleCreatedEventForTest(articleID, initialTitle, initialContent, initialPrice, initialVersion)
+
+	t.Run("Success_UpdatePrice", func(t *testing.T) {
+		mockES.Reset()
+		mockEH.Reset()
+
+		mockES.GetEventsForAggregateFunc = func(id string) ([]interface{}, error) {
+			if id != articleID {
+				t.Fatalf("GetEventsForAggregate called with wrong ID. Expected %s, got %s", articleID, id)
+			}
+			return []interface{}{initialCreateEventForPriceUpdate}, nil
+		}
+
+		newPrice := 25.50
+		priceCmd := commands.UpdateArticlePriceCommand{
+			ID:    articleID,
+			Price: newPrice,
+		}
+
+		err := cmdHandler.HandleUpdateArticle(priceCmd) // Using the main dispatcher
+		if err != nil {
+			t.Fatalf("HandleUpdateArticle(UpdateArticlePriceCommand) failed: %v", err)
+		}
+
+		if !mockES.GetEventsForAggCalled {
+			t.Error("expected EventStore.GetEventsForAggregate to be called")
+		}
+		if !mockES.SaveEventsCalled {
+			t.Error("expected EventStore.SaveEvents to be called")
+		}
+		if mockES.SavedAggID != articleID {
+			t.Errorf("expected SavedAggID %s, got %s", articleID, mockES.SavedAggID)
+		}
+		if len(mockES.SavedEvents) != 1 {
+			t.Fatalf("expected 1 saved event, got %d", len(mockES.SavedEvents))
+		}
+
+		priceUpdatedEvent, ok := mockES.SavedEvents[0].(*events.ArticlePriceUpdatedEvent)
+		if !ok {
+			t.Fatalf("expected ArticlePriceUpdatedEvent, got %T", mockES.SavedEvents[0])
+		}
+		if priceUpdatedEvent.ID != priceCmd.ID || priceUpdatedEvent.Price != priceCmd.Price {
+			t.Errorf("event content mismatch. Expected ID %s, Price %f. Got ID %s, Price %f",
+				priceCmd.ID, priceCmd.Price, priceUpdatedEvent.ID, priceUpdatedEvent.Price)
+		}
+		expectedNewVersion := initialVersion + 1
+		if priceUpdatedEvent.Version != expectedNewVersion {
+			t.Errorf("expected priceUpdatedEvent.Version to be %d, got %d", expectedNewVersion, priceUpdatedEvent.Version)
+		}
+		if mockES.SavedExpectedVersion != initialVersion {
+			t.Errorf("expected SavedExpectedVersion %d, got %d", initialVersion, mockES.SavedExpectedVersion)
+		}
+
+		if !mockEH.HandleEventCalled {
+			t.Error("expected EventHandler.HandleEvent to be called")
+		}
+		if len(mockEH.HandledEvents) != 1 {
+			t.Fatalf("expected 1 handled event, got %d", len(mockEH.HandledEvents))
+		}
+		if mockEH.HandledEvents[0] != priceUpdatedEvent {
+			t.Error("event handler handled a different event instance")
+		}
+	})
+
+	t.Run("AggregateNotFound_UpdatePrice", func(t *testing.T) {
+		mockES.Reset()
+		mockEH.Reset()
+		notFoundAggID := newID()
+		// notFoundErrText := fmt.Sprintf("aggregat %s nicht gefunden: keine Events vorhanden", notFoundAggID) // This variable is unused
+		mockES.GetEventsForAggregateFunc = func(id string) ([]interface{}, error) {
+			if id != notFoundAggID {
+				t.Fatalf("GetEventsForAggregate called with wrong ID. Expected %s, got %s", notFoundAggID, id)
+			}
+			return []interface{}{}, nil // Simulate not found
+		}
+
+		priceCmd := commands.UpdateArticlePriceCommand{ID: notFoundAggID, Price: 30.00}
+		err := cmdHandler.HandleUpdateArticle(priceCmd)
+
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+		// The specific error from aggregate.Rehydrate is "aggregat %s nicht gefunden: keine Events vorhanden"
+		expectedLoadErr := fmt.Sprintf("aggregat %s nicht gefunden: keine Events vorhanden", notFoundAggID)
+		expectedWrappedError := fmt.Sprintf("fehler beim Laden des Aggregats %s für UpdateArticlePriceCommand: %s", notFoundAggID, expectedLoadErr)
+		if err.Error() != expectedWrappedError {
+			t.Errorf("expected error message '%s', got '%s'", expectedWrappedError, err.Error())
+		}
+		if !mockES.GetEventsForAggCalled {
+			t.Error("expected GetEventsForAggregate to be called")
+		}
+		if mockES.SaveEventsCalled {
+			t.Error("expected SaveEvents NOT to be called")
+		}
+		if mockEH.HandleEventCalled {
+			t.Error("expected HandleEvent NOT to be called")
+		}
+	})
+
+	t.Run("OptimisticLockError_UpdatePrice", func(t *testing.T) {
+		mockES.Reset()
+		mockEH.Reset()
+
+		mockES.GetEventsForAggregateFunc = func(id string) ([]interface{}, error) {
+			return []interface{}{initialCreateEventForPriceUpdate}, nil // Loaded agg version is 0
+		}
+		optimisticLockErr := errors.New("optimistic lock error: version mismatch")
+		mockES.SaveEventsFunc = func(aggregateID string, evts []interface{}, expectedVersion int) error {
+			return optimisticLockErr
+		}
+
+		priceCmd := commands.UpdateArticlePriceCommand{ID: articleID, Price: 35.00}
+		err := cmdHandler.HandleUpdateArticle(priceCmd)
+
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+		expectedWrappedError := fmt.Sprintf("fehler beim Speichern der Events für Aggregat %s (erwartete Version %d): %s", articleID, initialVersion, optimisticLockErr.Error())
+		if err.Error() != expectedWrappedError {
+			t.Errorf("expected error message '%s', got '%s'", expectedWrappedError, err.Error())
+		}
+		if !mockES.GetEventsForAggCalled {
+			t.Error("expected GetEventsForAggregate to be called")
+		}
+		if !mockES.SaveEventsCalled {
+			t.Error("expected SaveEvents to be called")
+		}
+		if mockEH.HandleEventCalled {
+			t.Error("expected HandleEvent NOT to be called")
+		}
+	})
+
+	t.Run("SaveEventsError_UpdatePrice", func(t *testing.T) {
+		mockES.Reset()
+		mockEH.Reset()
+		mockES.GetEventsForAggregateFunc = func(id string) ([]interface{}, error) {
+			return []interface{}{initialCreateEventForPriceUpdate}, nil
+		}
+		saveErr := errors.New("disk full")
+		mockES.SaveEventsFunc = func(aggregateID string, evts []interface{}, expectedVersion int) error {
+			return saveErr
+		}
+
+		priceCmd := commands.UpdateArticlePriceCommand{ID: articleID, Price: 40.00}
+		err := cmdHandler.HandleUpdateArticle(priceCmd)
+		if err == nil {
+			t.Fatal("expected error from SaveEvents, got nil")
+		}
+		expectedWrappedError := fmt.Sprintf("fehler beim Speichern der Events für Aggregat %s (erwartete Version %d): %s", articleID, initialVersion, saveErr.Error())
+		if err.Error() != expectedWrappedError {
+			t.Errorf("expected error '%s', got '%s'", expectedWrappedError, err.Error())
+		}
+		if mockEH.HandleEventCalled {
+			t.Error("EventHandler.HandleEvent should not be called if SaveEvents fails")
+		}
+	})
+
+	// This test verifies that even if the event handler fails after successful save, the command itself is considered successful.
+	t.Run("EventHandlerErrorOnSave_UpdatePrice", func(t *testing.T) {
+		mockES.Reset()
+		mockEH.Reset()
+		mockES.GetEventsForAggregateFunc = func(id string) ([]interface{}, error) {
+			return []interface{}{initialCreateEventForPriceUpdate}, nil
+		}
+		eventHandlerErr := errors.New("read model update failed")
+		mockEH.HandleEventFunc = func(event interface{}) error {
+			// Simulate error only for ArticlePriceUpdatedEvent
+			if _, ok := event.(*events.ArticlePriceUpdatedEvent); ok {
+				return eventHandlerErr
+			}
+			return nil
+		}
+
+		priceCmd := commands.UpdateArticlePriceCommand{ID: articleID, Price: 45.00}
+		err := cmdHandler.HandleUpdateArticle(priceCmd)
+		if err != nil { // The command itself should succeed. The error is logged by the event handler.
+			t.Fatalf("HandleUpdateArticle(UpdateArticlePriceCommand) returned an error: %v. Expected nil as event handler errors are logged.", err)
+		}
+		if !mockES.SaveEventsCalled {
+			t.Error("SaveEvents should have been called")
+		}
+		if !mockEH.HandleEventCalled {
+			t.Error("EventHandler.HandleEvent should have been called")
+		}
+		// Further checks could involve log verification if a logging mock was injected.
 	})
 }
